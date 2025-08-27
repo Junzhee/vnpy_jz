@@ -46,3 +46,7 @@ data/*
 examples/*
 
 vnpy_ctastrategy/my_strategies/*
+
+
+# all pycache
+__pycache__/

@@ -418,6 +418,51 @@ class BacktestingEngine:
                 return_drawdown_ratio = -total_return / max_ddpercent
             else:
                 return_drawdown_ratio = 0
+            
+            def _summarize(pnls: list[float]) -> dict[str, float]:
+                total = len(pnls)
+                wins = [p for p in pnls if p > 0]
+                losses = [p for p in pnls if p < 0]
+                percent_profitable = (len(wins) / total * 100.0) if total else 0.0
+                avg_pnl = float(np.mean(pnls)) if total else 0.0
+                avg_win = float(np.mean(wins)) if wins else 0.0
+                avg_loss = float(np.mean(losses)) if losses else 0.0
+                ratio = (avg_win / abs(avg_loss)) if avg_loss != 0 else 0.0
+                return {
+                    "total_trades": total,
+                    "winning_trades": len(wins),
+                    "losing_trades": len(losses),
+                    "percent_profitable": percent_profitable,
+                    "avg_pnl": avg_pnl,
+                    "avg_winning_trade": avg_win,
+                    "avg_losing_trade": avg_loss,
+                    "ratio_avg_win_over_avg_loss": ratio,
+                }
+
+            # 逐日逐笔生成“以当日收盘价结算”的单笔净盈亏（含手续费与滑点）
+            all_pnls: list[float] = []
+            long_pnls: list[float] = []
+            short_pnls: list[float] = []
+
+            for dr in self.daily_results.values():
+                for tr in dr.trades:
+                    # 与 DailyResult.calculate_pnl 保持一致的方向与成本口径
+                    pos_change = tr.volume if tr.direction == Direction.LONG else -tr.volume
+                    gross = pos_change * (dr.close_price - tr.price) * self.size
+                    commission = tr.volume * self.size * tr.price * self.rate
+                    slippage_cost = tr.volume * self.size * self.slippage
+                    net = gross - commission - slippage_cost
+
+                    all_pnls.append(net)
+                    if tr.direction == Direction.LONG:
+                        long_pnls.append(net)
+                    else:
+                        short_pnls.append(net)
+
+            all_stats = _summarize(all_pnls)
+            long_stats = _summarize(long_pnls)
+            short_stats = _summarize(short_pnls)
+
 
         # Output
         if output:
@@ -456,6 +501,39 @@ class BacktestingEngine:
             self.output(f"EWM Sharpe：\t{ewm_sharpe:,.2f}")
             self.output(_("收益回撤比：\t{:,.2f}").format(return_drawdown_ratio))
 
+            # === NEW: 输出交易级统计 ===
+            self.output("-" * 30)
+            self.output("Trade Stats (All Directions)")
+            self.output(f"Total trades:\t{all_stats['total_trades']}")
+            self.output(f"Winning trades:\t{all_stats['winning_trades']}")
+            self.output(f"Losing trades:\t{all_stats['losing_trades']}")
+            self.output(f"Percent profitable:\t{all_stats['percent_profitable']:.2f}%")
+            self.output(f"Avg P&L:\t{all_stats['avg_pnl']:.2f}")
+            self.output(f"Avg winning trade:\t{all_stats['avg_winning_trade']:.2f}")
+            self.output(f"Avg losing trade:\t{all_stats['avg_losing_trade']:.2f}")
+            self.output(f"Ratio avg win / avg loss:\t{all_stats['ratio_avg_win_over_avg_loss']:.2f}")
+            self.output("-" * 30)
+            self.output("Trade Stats (Long)")
+            self.output(f"Total trades:\t{long_stats['total_trades']}")
+            self.output(f"Winning trades:\t{long_stats['winning_trades']}")
+            self.output(f"Losing trades:\t{long_stats['losing_trades']}")
+            self.output(f"Percent profitable:\t{long_stats['percent_profitable']:.2f}%")
+            self.output(f"Avg P&L:\t{long_stats['avg_pnl']:.2f}")
+            self.output(f"Avg winning trade:\t{long_stats['avg_winning_trade']:.2f}")
+            self.output(f"Avg losing trade:\t{long_stats['avg_losing_trade']:.2f}")
+            self.output(f"Ratio avg win / avg loss:\t{long_stats['ratio_avg_win_over_avg_loss']:.2f}")
+            self.output("-" * 30)
+            self.output("Trade Stats (Short)")
+            self.output(f"Total trades:\t{short_stats['total_trades']}")
+            self.output(f"Winning trades:\t{short_stats['winning_trades']}")
+            self.output(f"Losing trades:\t{short_stats['losing_trades']}")
+            self.output(f"Percent profitable:\t{short_stats['percent_profitable']:.2f}%")
+            self.output(f"Avg P&L:\t{short_stats['avg_pnl']:.2f}")
+            self.output(f"Avg winning trade:\t{short_stats['avg_winning_trade']:.2f}")
+            self.output(f"Avg losing trade:\t{short_stats['avg_losing_trade']:.2f}")
+            self.output(f"Ratio avg win / avg loss:\t{short_stats['ratio_avg_win_over_avg_loss']:.2f}")
+
+
         statistics: dict = {
             "start_date": start_date,
             "end_date": end_date,
@@ -485,6 +563,38 @@ class BacktestingEngine:
             "ewm_sharpe": ewm_sharpe,
             "return_drawdown_ratio": return_drawdown_ratio,
         }
+        
+        # === NEW: 将交易级统计扁平写入 statistics ===
+        if positive_balance:
+            statistics.update({
+                # All
+                "all_total_trades": all_stats["total_trades"],
+                "all_winning_trades": all_stats["winning_trades"],
+                "all_losing_trades": all_stats["losing_trades"],
+                "all_percent_profitable": all_stats["percent_profitable"],
+                "all_avg_pnl": all_stats["avg_pnl"],
+                "all_avg_winning_trade": all_stats["avg_winning_trade"],
+                "all_avg_losing_trade": all_stats["avg_losing_trade"],
+                "all_ratio_avg_win_over_avg_loss": all_stats["ratio_avg_win_over_avg_loss"],
+                # Long
+                "long_total_trades": long_stats["total_trades"],
+                "long_winning_trades": long_stats["winning_trades"],
+                "long_losing_trades": long_stats["losing_trades"],
+                "long_percent_profitable": long_stats["percent_profitable"],
+                "long_avg_pnl": long_stats["avg_pnl"],
+                "long_avg_winning_trade": long_stats["avg_winning_trade"],
+                "long_avg_losing_trade": long_stats["avg_losing_trade"],
+                "long_ratio_avg_win_over_avg_loss": long_stats["ratio_avg_win_over_avg_loss"],
+                # Short
+                "short_total_trades": short_stats["total_trades"],
+                "short_winning_trades": short_stats["winning_trades"],
+                "short_losing_trades": short_stats["losing_trades"],
+                "short_percent_profitable": short_stats["percent_profitable"],
+                "short_avg_pnl": short_stats["avg_pnl"],
+                "short_avg_winning_trade": short_stats["avg_winning_trade"],
+                "short_avg_losing_trade": short_stats["avg_losing_trade"],
+                "short_ratio_avg_win_over_avg_loss": short_stats["ratio_avg_win_over_avg_loss"],
+            })
 
         # Filter potential error infinite value
         for key, value in statistics.items():
@@ -506,9 +616,9 @@ class BacktestingEngine:
             return
 
         fig = make_subplots(
-            rows=4,
+            rows=5,
             cols=1,
-            subplot_titles=["Balance", "Drawdown", "Daily Pnl", "Pnl Distribution"],
+            subplot_titles=["Balance", "Drawdown", "Daily Pnl", "Pnl Distribution", "Buy & Hold vs Strategy"],
             vertical_spacing=0.06
         )
 
@@ -527,6 +637,14 @@ class BacktestingEngine:
             mode="lines",
             name="Drawdown"
         )
+
+        # --- Buy & Hold 资金曲线（用初始资金在首日收盘全买，忽略手续费滑点）---
+        if "close_price" in df.columns and len(df) > 0:
+            bh_curve = self.capital * (df["close_price"] / df["close_price"].iloc[0])
+        else:
+            # 若缺少 close_price，则退化为只画策略资金
+            bh_curve = None
+
         pnl_bar = go.Bar(y=df["net_pnl"], name="Daily Pnl")
         pnl_histogram = go.Histogram(x=df["net_pnl"], nbinsx=100, name="Days")
 
@@ -534,8 +652,23 @@ class BacktestingEngine:
         fig.add_trace(drawdown_scatter, row=2, col=1)
         fig.add_trace(pnl_bar, row=3, col=1)
         fig.add_trace(pnl_histogram, row=4, col=1)
+        if bh_curve is not None:
+            bh_line = go.Scatter(
+                x=df.index,
+                y=bh_curve,
+                mode="lines",
+                name="Buy & Hold"
+            )
+            strategy_line = go.Scatter(
+                x=df.index,
+                y=df["balance"],
+                mode="lines",
+                name="Strategy"
+            )
+            fig.add_trace(bh_line, row=5, col=1)
+            fig.add_trace(strategy_line, row=5, col=1)
 
-        fig.update_layout(height=1000, width=1000)
+        fig.update_layout(height=1200, width=1000)
         return fig
 
     def run_bf_optimization(
