@@ -59,7 +59,7 @@ class BacktestingEngine:
         self.end: datetime # 回测结束时间
         self.rate: float = 0 # 手续费
         self.slippage: float = 0 # 滑点
-        self.size: float = 1 # 合约大小
+        self.size: float = 1 # 合约大小 乘数
         self.pricetick: float = 0 # 最小价格变动
         self.capital: int = 1_000_000 # 初始资金
         self.risk_free: float = 0 # 无风险利率 -> 用于计算夏普比率等
@@ -419,49 +419,50 @@ class BacktestingEngine:
             else:
                 return_drawdown_ratio = 0
             
-            def _summarize(pnls: list[float]) -> dict[str, float]:
-                total = len(pnls)
-                wins = [p for p in pnls if p > 0]
-                losses = [p for p in pnls if p < 0]
-                percent_profitable = (len(wins) / total * 100.0) if total else 0.0
-                avg_pnl = float(np.mean(pnls)) if total else 0.0
-                avg_win = float(np.mean(wins)) if wins else 0.0
-                avg_loss = float(np.mean(losses)) if losses else 0.0
-                ratio = (avg_win / abs(avg_loss)) if avg_loss != 0 else 0.0
-                return {
-                    "total_trades": total,
-                    "winning_trades": len(wins),
-                    "losing_trades": len(losses),
-                    "percent_profitable": percent_profitable,
-                    "avg_pnl": avg_pnl,
-                    "avg_winning_trade": avg_win,
-                    "avg_losing_trade": avg_loss,
-                    "ratio_avg_win_over_avg_loss": ratio,
-                }
+        def _summarize(pnls: list[float]) -> dict[str, float]:
+            total = len(pnls)
+            wins = [p for p in pnls if p > 0]
+            losses = [p for p in pnls if p < 0]
+            percent_profitable = (len(wins) / total * 100.0) if total else 0.0
+            avg_pnl = float(np.mean(pnls)) if total else 0.0
+            avg_win = float(np.mean(wins)) if wins else 0.0
+            avg_loss = float(np.mean(losses)) if losses else 0.0
+            ratio = (avg_win / abs(avg_loss)) if avg_loss != 0 else 0.0
+            return {
+                "total_trades": total,
+                "winning_trades": len(wins),
+                "losing_trades": len(losses),
+                "percent_profitable": percent_profitable,
+                "avg_pnl": avg_pnl,
+                "avg_winning_trade": avg_win,
+                "avg_losing_trade": avg_loss,
+                "ratio_avg_win_over_avg_loss": ratio,
+            }
 
-            # 逐日逐笔生成“以当日收盘价结算”的单笔净盈亏（含手续费与滑点）
-            all_pnls: list[float] = []
-            long_pnls: list[float] = []
-            short_pnls: list[float] = []
+        # 逐日逐笔生成“以当日收盘价结算”的单笔净盈亏（含手续费与滑点）
+        all_pnls: list[float] = []
+        long_pnls: list[float] = []
+        short_pnls: list[float] = []
 
-            for dr in self.daily_results.values():
-                for tr in dr.trades:
-                    # 与 DailyResult.calculate_pnl 保持一致的方向与成本口径
-                    pos_change = tr.volume if tr.direction == Direction.LONG else -tr.volume
-                    gross = pos_change * (dr.close_price - tr.price) * self.size
-                    commission = tr.volume * self.size * tr.price * self.rate
-                    slippage_cost = tr.volume * self.size * self.slippage
-                    net = gross - commission - slippage_cost
+        for dr in self.daily_results.values():
+            for tr in dr.trades:
+                # 与 DailyResult.calculate_pnl 保持一致的方向与成本口径
+                pos_change = tr.volume if tr.direction == Direction.LONG else -tr.volume
+                gross = pos_change * (dr.close_price - tr.price) * self.size
+                commission = tr.volume * self.size * tr.price * self.rate
+                slippage_cost = tr.volume * self.size * self.slippage
+                net = gross - commission - slippage_cost
 
-                    all_pnls.append(net)
+                all_pnls.append(net)
+                if tr.offset == Offset.OPEN:    # 只对于开仓单计算多空盈亏
                     if tr.direction == Direction.LONG:
-                        long_pnls.append(net)
-                    else:
-                        short_pnls.append(net)
+                        long_pnls.append(net)      
+                    elif tr.direction == Direction.SHORT:
+                        short_pnls.append(net) 
 
-            all_stats = _summarize(all_pnls)
-            long_stats = _summarize(long_pnls)
-            short_stats = _summarize(short_pnls)
+        all_stats = _summarize(all_pnls)
+        long_stats = _summarize(long_pnls)
+        short_stats = _summarize(short_pnls)
 
 
         # Output
